@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF Intelligence — Extractor</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <header>
+    <div class="header-inner">
+      <span class="logo">📄</span>
+      <div>
+        <h1>PDF Intelligence — Extractor</h1>
+        <p>Upload a German business document · Choose a template or write your own query</p>
+      </div>
+    </div>
+  </header>
+
+  <main>
+
+    <!-- 1. Upload -->
+    <div class="card">
+      <h2>1 · Upload PDF</h2>
+      <div class="drop-zone" id="drop-zone">
+        <div id="drop-label">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M12 16V4m0 0L8 8m4-4l4 4"/><rect x="3" y="16" width="18" height="5" rx="1"/>
+          </svg>
+          <br/>Drop your PDF here or <u>click to browse</u>
+        </div>
+        <input type="file" id="pdf-input" accept=".pdf" hidden />
+      </div>
+    </div>
+
+    <!-- 2. Query -->
+    <div class="card">
+      <h2>2 · What to extract</h2>
+
+      <!-- All template buttons in one group -->
+      <div class="quick-btns">
+        <button class="quick-btn quick-btn-primary" id="general-btn">General Information</button>
+        <button class="quick-btn" data-q="What is the company name, legal form, HRB registration number, registration court, registration date, and registered address?">Company identity</button>
+        <button class="quick-btn" data-q="What is the full business purpose (Unternehmensgegenstand)?">Business purpose</button>
+        <button class="quick-btn" data-q="Who are the current and former managing directors (Geschäftsführer)? For each: full name, appointment date, removal date, location.">Directors</button>
+        <button class="quick-btn" data-q="Who are the shareholders (Gesellschafter)? For each: name, share amount in EUR, share percentage.">Shareholders</button>
+        <button class="quick-btn" data-q="What is the share capital (Stammkapital) and equity (Eigenkapital)? Give exact values in EUR for all available years.">Capital &amp; equity</button>
+        <button class="quick-btn" data-q="What is the revenue (Umsatzerlöse) and net profit or loss (Jahresüberschuss / Jahresfehlbetrag) for all available years?">Revenue &amp; profit</button>
+        <button class="quick-btn" data-q="What are the total liabilities (Verbindlichkeiten gesamt) and short-term liabilities for all available years?">Liabilities</button>
+        <button class="quick-btn" data-q="Are there any insolvency, dissolution, or going concern signals in this document?">Insolvency signals</button>
+      </div>
+
+      <!-- Custom query box — visually grouped -->
+      <div class="query-box">
+        <div class="query-label">Custom query — or edit a template above</div>
+        <textarea id="question" rows="4" placeholder="Type your own extraction query — e.g. &quot;What assets does the company own?&quot;  &#10;You can also click any button above to load a template here."></textarea>
+        <button class="search-btn" id="search-btn">Extract from PDF →</button>
+      </div>
+    </div>
+
+    <!-- 3. Result -->
+    <div class="card hidden" id="result-card">
+      <h2>3 · Result</h2>
+      <div id="spinner" class="spinner hidden"><div class="spin"></div> Extracting…</div>
+      <div id="result-content"></div>
+    </div>
+
+  </main>
+
+  <!-- Settings -->
+  <button class="settings-trigger" title="API Keys" onclick="document.getElementById('modal-overlay').classList.remove('hidden')">⚙️</button>
+
+  <div class="modal-overlay hidden" id="modal-overlay" onclick="if(event.target===this)this.classList.add('hidden')">
+    <div class="modal">
+      <h3>⚙️ Settings</h3>
+      <p class="modal-note">Values from <code>.env</code> are used by default. Override here only if needed.</p>
+
+      <label>Provider
+        <select id="provider" onchange="onProviderChange()">
+          <option value="ollama">Ollama — local, free, no internet</option>
+          <option value="openai">OpenAI (GPT-4o, GPT-4o-mini…)</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="gemini">Gemini</option>
+        </select>
+      </label>
+
+      <label id="key-row">API Key
+        <input type="password" id="api-key" placeholder="Leave empty to use .env" />
+      </label>
+
+      <label>Model
+        <input type="text" id="model-name" placeholder="llama3.1" value="llama3.1" />
+        <small id="model-hint">Ollama must be running locally. Default: llama3.1</small>
+      </label>
+
+      <button class="modal-close" onclick="document.getElementById('modal-overlay').classList.add('hidden')">Save &amp; Close</button>
+    </div>
+  </div>
+
+  <script>
+    let lastResult  = null;
+    let lastFilename = 'result';
+
+    // ── prevent browser from opening dropped files outside the zone ────────────
+    window.addEventListener('dragover', e => e.preventDefault());
+    window.addEventListener('drop',     e => e.preventDefault());
+
+    // ── drag-and-drop upload ───────────────────────────────────────────────────
+    const pdfInput  = document.getElementById('pdf-input');
+    const dropZone  = document.getElementById('drop-zone');
+    const dropLabel = document.getElementById('drop-label');
+
+    dropZone.addEventListener('click', () => pdfInput.click());
+
+    dropZone.addEventListener('dragenter', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+    dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+    dropZone.addEventListener('dragleave', e => {
+      if (!dropZone.contains(e.relatedTarget)) dropZone.classList.remove('drag-over');
+    });
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file) setFile(file);
+    });
+    pdfInput.addEventListener('change', () => { if (pdfInput.files[0]) setFile(pdfInput.files[0]); });
+
+    function setFile(f) {
+      pdfInput._file   = f;
+      lastFilename     = f.name.replace(/\.pdf$/i, '');
+      dropLabel.innerHTML = `✅ <strong>${f.name}</strong> (${(f.size / 1024).toFixed(0)} KB)`;
+    }
+
+    // ── template buttons → fill textarea ──────────────────────────────────────
+    document.querySelectorAll('.quick-btn[data-q]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.getElementById('question').value = btn.dataset.q;
+        document.querySelectorAll('.quick-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+
+    // ── helpers ────────────────────────────────────────────────────────────────
+    function getFile() { return pdfInput._file || pdfInput.files[0]; }
+    function getKeys() {
+      return {
+        ollama:   document.getElementById('ollama-model').value.trim(),
+        deepseek: document.getElementById('deepseek-key').value.trim(),
+        gemini:   document.getElementById('gemini-key').value.trim(),
+      };
+    }
+    // ── provider switcher ──────────────────────────────────────────────────────
+    const PROVIDER_DEFAULTS = {
+      ollama:   { model: 'llama3.1',              hint: 'Ollama must be running locally. Default: llama3.1' },
+      openai:   { model: 'gpt-4o-mini',           hint: 'Default: gpt-4o-mini' },
+      deepseek: { model: 'deepseek-chat',         hint: 'Default: deepseek-chat' },
+      gemini:   { model: 'gemini-2.0-flash',      hint: 'Default: gemini-2.0-flash' },
+    };
+    function onProviderChange() {
+      const p    = document.getElementById('provider').value;
+      const info = PROVIDER_DEFAULTS[p];
+      document.getElementById('model-name').value       = info.model;
+      document.getElementById('model-name').placeholder = info.model;
+      document.getElementById('model-hint').textContent = info.hint;
+      document.getElementById('key-row').style.display  = p === 'ollama' ? 'none' : 'block';
+    }
+
+    function buildForm(file, question) {
+      const f = new FormData();
+      f.append('pdf',      file);
+      f.append('question', question);
+      f.append('provider', document.getElementById('provider').value);
+      f.append('api_key',  document.getElementById('api-key').value.trim());
+      f.append('model',    document.getElementById('model-name').value.trim());
+      return f;
+    }
+    function showSpinner() {
+      document.getElementById('result-card').classList.remove('hidden');
+      document.getElementById('spinner').classList.remove('hidden');
+      document.getElementById('result-content').innerHTML = '';
+    }
+    function hideSpinner() { document.getElementById('spinner').classList.add('hidden'); }
+    function showError(msg) {
+      document.getElementById('result-card').classList.remove('hidden');
+      hideSpinner();
+      document.getElementById('result-content').innerHTML = `<div class="error-box">❌ ${msg}</div>`;
+    }
+    function downloadJson() {
+      if (!lastResult) return;
+      // Only save the extracted findings as clean key-value pairs
+      const findings = (lastResult.findings || []).filter(f => f.value && f.value !== 'null');
+      const clean = {};
+      findings.forEach(f => { clean[f.label] = f.value; });
+
+      const ts   = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+      const blob = new Blob([JSON.stringify(clean, null, 2)], { type: 'application/json' });
+      const url  = URL.createObjectURL(blob);
+      const a    = Object.assign(document.createElement('a'), { href: url, download: `${lastFilename}_${ts}.json` });
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+    }
+
+    // ── General Information — fills textarea and runs immediately ──────────────
+    const GENERAL_QUESTION =
+`Extract the following from this document. Return each item as a labeled finding.
+
+Company: name, legal form, HRB number, registration court, registration date, address.
+Business purpose (Unternehmensgegenstand): full text.
+Current directors (Geschäftsführer): name, appointment date, location — one finding per person.
+Former directors: name, appointment date, removal date — one finding per person.
+Shareholders (Gesellschafter): name, share amount EUR, percentage — one finding per person.
+Share capital (Stammkapital): current year and prior year.
+Equity (Eigenkapital): current year and prior year.
+Total assets (Bilanzsumme): current year and prior year.
+Revenue (Umsatzerlöse): current year and prior year.
+Net profit or loss (Jahresüberschuss / Jahresfehlbetrag): current year and prior year.
+Total liabilities (Verbindlichkeiten): current year and prior year.
+Cash and bank (Kassenbestand): current year and prior year.
+Any insolvency or going concern signals.`;
+
+    document.getElementById('general-btn').addEventListener('click', async () => {
+      const file = getFile();
+      if (!file) return showError('Please upload a PDF first.');
+      document.getElementById('question').value = GENERAL_QUESTION;
+      document.querySelectorAll('.quick-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('general-btn').classList.add('active');
+      await runExtract(file, GENERAL_QUESTION);
+    });
+
+    // ── Extract button ─────────────────────────────────────────────────────────
+    document.getElementById('search-btn').addEventListener('click', async () => {
+      const file     = getFile();
+      const question = document.getElementById('question').value.trim();
+      if (!file)     return showError('Please upload a PDF first.');
+      if (!question) return showError('Please enter a query or click a template button above.');
+      await runExtract(file, question);
+    });
+
+    async function runExtract(file, question) {
+      showSpinner();
+      try {
+        const resp = await fetch('/analyze', { method: 'POST', body: buildForm(file, question) });
+        const data = await resp.json();
+        hideSpinner();
+        if (data.error) return showError(data.error);
+        lastResult = data;
+        document.getElementById('result-content').innerHTML = renderResult(data);
+      } catch (err) { showError('Network error: ' + err.message); }
+    }
+
+    // ── render result ──────────────────────────────────────────────────────────
+    function renderResult(data) {
+      let html = '';
+
+      if (data.keywords?.length) {
+        html += `<div class="keyword-banner warn">⚠️ Insolvency keywords found: ${data.keywords.join(', ')}</div>`;
+      }
+
+      const findings = (data.findings || []).filter(f => f.value && f.value !== 'null');
+      if (findings.length) {
+        html += `<div class="result-list">`;
+        findings.forEach(f => {
+          html += `<div class="result-row">
+            <span class="result-key">${f.label}</span>
+            <span class="result-val">${f.value}</span>
+          </div>`;
+        });
+        html += `</div>`;
+      }
+
+      html += `<div class="result-actions">
+        <button class="download-btn" onclick="downloadJson()">⬇ Download JSON</button>
+      </div>`;
+
+      return html;
+    }
+  </script>
+</body>
+</html>
