@@ -21,13 +21,4 @@ python app.py               # open http://127.0.0.1:5000
 ollama pull llama3.1
 ```
 
-## Supported providers
-
-| Provider | Cost | Data privacy |
-|---|---|---|
-| Ollama (local) | Free | ✅ Stays on your machine |
-| OpenAI | Pay per use | Sent to OpenAI |
-| DeepSeek | Pay per use | Sent to DeepSeek |
-| Gemini | Free tier | Sent to Google |
-
 → Full setup and configuration: [GUIDE.md](GUIDE.md)
